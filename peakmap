@@ -1,0 +1,133 @@
+#!/usr/bin/env python3
+
+"""
+Plot peaks based on OS grid references
+SPDX-License-Identifier: GPL-2.0-only
+Copyright (C) Johan Malm 2024
+"""
+
+import argparse
+import math
+import sys
+from enum import Enum
+import pandas as pd
+import cairo
+
+class Config(Enum):
+    MAP_WIDTH = 2000
+    MAP_HEIGHT = 2000
+
+class Map():
+    """
+    A class to represent a map of mountains with triangles and circles
+    representing big and small peaks respectively.
+    """
+
+    def __init__(self, peaks, bagged):
+        """
+        Construct attributes for Map object
+
+        Parameters
+        ----------
+            peaks : str
+                filename of csv file containing all peaks
+            bagged : str
+                filename of csv file with the bagged (climbed) peaks
+        """
+        self.df = pd.read_csv(peaks, skip_blank_lines=True)
+        for index, row in self.df.iterrows():
+            self.df.at[index, 'x'] = int(row['GridRef'][2:5])
+            self.df.at[index, 'y'] = int(row['GridRef'][5:8])
+            self.df.at[index, 'bagged'] = False
+
+        self.bagged = pd.read_csv(bagged, skip_blank_lines=True)
+        for _, bagged_row in self.bagged.iterrows():
+            for index, row in self.df.iterrows():
+                if bagged_row['GridRef'] == row['GridRef']:
+                    self.df.at[index, 'bagged'] = True
+
+        margin = 50
+        self.startx = self.df['x'].min() - margin
+        self.starty = self.df['y'].min() - margin
+        self.finishx = self.df['x'].max() + margin
+        self.finishy = self.df['y'].max() + margin
+        print(f"sx={self.startx}, sy={self.starty}, fx={self.finishx}, fy={self.finishy}")
+
+    def normalize_width(self, width):
+        return width / (self.finishx - self.startx)
+
+    def normalize_height(self, height):
+        return height / (self.finishy - self.starty)
+
+    def normalize_x(self, x):
+        range_x = self.finishx - self.startx
+        return (x - self.startx) / range_x
+
+    def normalize_y(self, y):
+        range_y = self.finishy - self.starty
+        return 1.0 - (y - self.starty) / range_y
+
+    def normalize(self, x, y):
+        return self.normalize_x(x), self.normalize_y(y)
+
+    def plot(self, filename):
+        """ plot """
+        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, Config.MAP_WIDTH.value, Config.MAP_HEIGHT.value)
+        ctx = cairo.Context(surface)
+        ctx.scale(Config.MAP_WIDTH.value, Config.MAP_HEIGHT.value)
+
+        ctx.set_source_rgb(1.0, 1.0, 1.0)
+        ctx.rectangle(0, 0, Config.MAP_WIDTH.value, Config.MAP_HEIGHT.value)
+        ctx.fill()
+
+        ctx.set_font_size(self.normalize_height(4))
+
+        for _, row in self.df.iterrows():
+            if not pd.isnull(row['Triangle']):
+                ctx.set_source_rgb(1.0, 0.0, 0.0)
+                size = self.normalize_width(3)
+                x, y = self.normalize(row['x'], row['y'])
+                ctx.move_to(x, y - size*2/3)
+                ctx.line_to(x + size/2, y + size/3)
+                ctx.line_to(x - size/2, y + size/3)
+                ctx.line_to(x, y - size*2/3)
+                ctx.set_line_width(self.normalize_width(0.5))
+                ctx.stroke()
+                ctx.move_to(x, y)
+                ctx.show_text(row['Name'])
+            elif not pd.isnull(row['Circle']):
+                if row['bagged'] is True:
+                    ctx.set_source_rgb(0.0, 0.0, 0.0)
+                else:
+                    ctx.set_source_rgb(1.0, 0.0, 0.0)
+                size = 3
+                x, y = self.normalize(row['x'], row['y'])
+                ctx.arc(x, y, self.normalize_width(size)/2, 0, 2*math.pi)
+                ctx.close_path()
+                ctx.fill()
+                ctx.move_to(x, y)
+                ctx.show_text(row['Name'])
+
+        surface.write_to_png(filename)
+
+    def print_dataframe(self):
+        print(self.df)
+
+def main():
+    """ main """
+    parser = argparse.ArgumentParser(prog="peakmap")
+    parser.add_argument("--peaks", help="csv file with all peaks", metavar="FILE")
+    parser.add_argument("--bagged", help="csv file with bagged peaks", metavar="FILE")
+    parser.add_argument("--output", help="filename of output png file", metavar="FILE")
+    args = parser.parse_args()
+
+    if args.peaks is None or args.bagged is None or args.output is None:
+        parser.print_help(sys.stderr)
+        sys.exit(1)
+
+    m = Map(args.peaks, args.bagged)
+    m.plot(args.output)
+    m.print_dataframe()
+
+if __name__ == '__main__':
+    main()
